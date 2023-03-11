@@ -228,6 +228,23 @@
 					? database.publicPort
 					: privatePort}
 			/>
+
+      {#if database.type === 'postgresql'}
+
+			<label for="publicPort">{$t('forms.pgbouncer_port')}</label>
+			<CopyPasswordField
+				placeholder={$t('database.generated_automatically_after_set_to_public')}
+				id="pgBouncerPublicPort"
+				readonly
+				disabled
+				name="pgBouncerPublicPort"
+				value={loading.public
+					? 'Loading...'
+					: $status.database.isPublic
+					? database.publicPort + 1
+					: 6342}
+			/>
+      {/if}
 		</div>
 		{#if database.type === 'mysql'}
 			<MySql bind:database />

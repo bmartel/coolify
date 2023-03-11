@@ -96,8 +96,16 @@ export async function cleanupUnconfiguredDatabases(request: FastifyRequest) {
 				const { id } = database;
 				if (database.destinationDockerId) {
 					const everStarted = await stopDatabaseContainer(database);
-					if (everStarted)
+					if (everStarted) {
 						await stopTcpHttpProxy(id, database.destinationDocker, database.publicPort);
+						if (database.type === 'postgresql') {
+							await stopTcpHttpProxy(
+								`${id}-pgbouncer`,
+								database.destinationDocker,
+								database.publicPort + 1
+							);
+						}
+					}
 				}
 				await prisma.databaseSettings.deleteMany({ where: { databaseId: id } });
 				await prisma.databaseSecret.deleteMany({ where: { databaseId: id } });
@@ -290,6 +298,7 @@ export async function startDatabase(request: FastifyRequest<OnlyId>) {
 			where: { id, teams: { some: { id: teamId === '0' ? undefined : teamId } } },
 			include: { destinationDocker: true, settings: true, databaseSecret: true }
 		});
+
 		const { arch } = await listSettings();
 		if (database.dbUserPassword) database.dbUserPassword = decrypt(database.dbUserPassword);
 		if (database.rootUserPassword) database.rootUserPassword = decrypt(database.rootUserPassword);
@@ -326,7 +335,24 @@ export async function startDatabase(request: FastifyRequest<OnlyId>) {
 					ulimits,
 					labels,
 					...defaultComposeConfiguration(network)
-				}
+				},
+				...(database.type === 'postgresql'
+					? {
+							[`${id}-pgbouncer`]: {
+								container_name: `${id}-pgbouncer`,
+								image: 'bitnami/pgbouncer:latest',
+								environment: {
+									...environmentVariables,
+									PGBOUNCER_DATABASE: environmentVariables['POSTGRESQL_DATABASE'],
+									POSTGRESQL_HOST: id,
+									POSTGRESQL_PORT: 5432,
+									PGBOUNCER_PORT: 6432,
+									PGBOUNCER_IGNORE_STARTUP_PARAMETERS: 'extra_float_digits'
+								},
+								...defaultComposeConfiguration(network)
+							}
+					  }
+					: null)
 			},
 			networks: {
 				[network]: {
@@ -345,7 +371,13 @@ export async function startDatabase(request: FastifyRequest<OnlyId>) {
 			dockerId: destinationDocker.id,
 			command: `docker compose -f ${composeFileDestination} up -d`
 		});
-		if (isPublic) await startTraefikTCPProxy(destinationDocker, id, publicPort, privatePort);
+		if (isPublic) {
+			await startTraefikTCPProxy(destinationDocker, id, publicPort, privatePort);
+
+			if (database.type === 'postgresql') {
+				await startTraefikTCPProxy(destinationDocker, `${id}-pgbouncer`, publicPort + 1, 6432);
+			}
+		}
 		return {};
 	} catch ({ status, message }) {
 		return errorHandler({ status, message });
@@ -362,7 +394,16 @@ export async function stopDatabase(request: FastifyRequest<OnlyId>) {
 		if (database.dbUserPassword) database.dbUserPassword = decrypt(database.dbUserPassword);
 		if (database.rootUserPassword) database.rootUserPassword = decrypt(database.rootUserPassword);
 		const everStarted = await stopDatabaseContainer(database);
-		if (everStarted) await stopTcpHttpProxy(id, database.destinationDocker, database.publicPort);
+		if (everStarted) {
+			await stopTcpHttpProxy(id, database.destinationDocker, database.publicPort);
+			if (database.type === 'postgresql') {
+				await stopTcpHttpProxy(
+					`${id}-pgbouncer`,
+					database.destinationDocker,
+					database.publicPort + 1
+				);
+			}
+		}
 		await prisma.database.update({
 			where: { id },
 			data: {
@@ -435,7 +476,17 @@ export async function deleteDatabase(request: FastifyRequest<DeleteDatabase>) {
 		if (database.rootUserPassword) database.rootUserPassword = decrypt(database.rootUserPassword);
 		if (database.destinationDockerId) {
 			const everStarted = await stopDatabaseContainer(database);
-			if (everStarted) await stopTcpHttpProxy(id, database.destinationDocker, database.publicPort);
+			if (everStarted) {
+				await stopTcpHttpProxy(id, database.destinationDocker, database.publicPort);
+
+				if (database.type === 'postgresql') {
+					await stopTcpHttpProxy(
+						`${id}-pgbouncer`,
+						database.destinationDocker,
+						database.publicPort + 1
+					);
+				}
+			}
 		}
 		await prisma.databaseSettings.deleteMany({ where: { databaseId: id } });
 		await prisma.databaseSecret.deleteMany({ where: { databaseId: id } });
@@ -527,9 +578,15 @@ export async function saveDatabaseSettings(request: FastifyRequest<SaveDatabaseS
 			if (isPublic) {
 				await prisma.database.update({ where: { id }, data: { publicPort } });
 				await startTraefikTCPProxy(destinationDocker, id, publicPort, privatePort);
+				if (database.type === 'postgresql') {
+					await startTraefikTCPProxy(destinationDocker, `${id}-pgbouncer`, publicPort + 1, 6432);
+				}
 			} else {
 				await prisma.database.update({ where: { id }, data: { publicPort: null } });
 				await stopTcpHttpProxy(id, destinationDocker, oldPublicPort);
+				if (database.type === 'postgresql') {
+					await stopTcpHttpProxy(`${id}-pgbouncer`, destinationDocker, oldPublicPort + 1);
+				}
 			}
 		}
 		return { publicPort };

@@ -50,6 +50,7 @@
 		"confirm_continue": "Are you sure to continue?",
 		"must_be_stopped_to_modify": "Must be stopped to modify.",
 		"port": "Port",
+		"pgbouncer_port": "Pgbouncer Port",
 		"default": "default",
 		"base_directory": "Base Directory",
 		"publish_directory": "Publish Directory",
